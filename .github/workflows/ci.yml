@@ -169,6 +169,25 @@ jobs:
           curl --fail --silent --show-error -u "${auth}" "${base}/api/dashboards/uid/infra-lab-overview" \
             | jq -e '.dashboard.title'
 
+      - name: "Grafana: la interfaz carga todos sus ficheros a traves del proxy"
+        run: |
+          html="$(curl --fail --silent --show-error http://localhost:8080/grafana/login)"
+          # Con serve_from_sub_path, los recursos son relativos a <base href="/grafana/">
+          echo "${html}" | grep -q '<base href="/grafana/"'
+          assets="$(echo "${html}" | grep -oE '(src|href)="public/build/[^"]+\.(js|css)"' | cut -d'"' -f2)"
+          [ -n "${assets}" ]
+          failed=0
+          for asset in ${assets}; do
+            result="$(curl --silent --output /dev/null --write-out '%{http_code} %{content_type}' \
+              "http://localhost:8080/grafana/${asset}")"
+            echo "${asset} -> ${result}"
+            case "${result}" in
+              "200 text/javascript"*|"200 text/css"*) ;;
+              *) failed=1 ;;
+            esac
+          done
+          [ "${failed}" -eq 0 ]
+
       - name: Comprobar aislamiento de red
         run: |
           set -x

@@ -25,7 +25,13 @@ const TARGETS = [
 ];
 
 async function capture(browser, target) {
-  const page = await browser.newPage({ viewport: target.viewport });
+  // Sin locale explicito, Chromium hereda el del runner ("en-US@posix"), que
+  // Intl.NumberFormat rechaza y hace que Grafana no llegue a arrancar.
+  const page = await browser.newPage({
+    viewport: target.viewport,
+    locale: "es-ES",
+    timezoneId: "Europe/Madrid",
+  });
   const problems = [];
   page.on("console", (msg) => {
     if (msg.type() === "error") problems.push(`console: ${msg.text()}`);

@@ -55,21 +55,6 @@ jobs:
           # Esperar a que Prometheus haga un ultimo scrape
           sleep 20
 
-      - name: "Diagnostico: HTML y recursos de Grafana a traves del proxy"
-        run: |
-          html="$(curl -fsS http://localhost:8080/grafana/login)"
-          echo "${html}" | grep -oE '<base [^>]*>' || echo "(sin <base>)"
-          echo "${html}" | grep -oE '(src|href)="[^"]*public/build/[^"]*"' | head -n 8 | while read -r attr; do
-            path="${attr#*=\"}"; path="${path%\"}"
-            case "${path}" in
-              http*) url="${path}" ;;
-              /*) url="http://localhost:8080${path}" ;;
-              *) url="http://localhost:8080/grafana/${path}" ;;
-            esac
-            printf '%s  ->  %s\n' "${path}" \
-              "$(curl -s -o /dev/null -w '%{http_code} %{content_type} %{size_download}B' "${url}")"
-          done
-
       - name: Instalar Playwright y Chromium
         working-directory: ${{ runner.temp }}
         run: |
