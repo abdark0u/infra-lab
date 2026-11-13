@@ -7,10 +7,18 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-RUN useradd --create-home --uid 10001 appuser
+# Parches de seguridad de Debian publicados despues de la imagen base
+# (Trivy los detecta con `make scan`) y usuario sin privilegios para la app
+RUN apt-get update \
+    && DEBIAN_FRONTEND=noninteractive apt-get upgrade -y --no-install-recommends \
+    && rm -rf /var/lib/apt/lists/* \
+    && useradd --create-home --uid 10001 appuser
 
+# pip solo hace falta para instalar las dependencias: se desinstala para que no
+# quede en la imagen final (las librerias que lleva dentro tenian vulnerabilidades)
 COPY requirements.txt .
-RUN pip install -r requirements.txt
+RUN pip install -r requirements.txt \
+    && pip uninstall -y pip
 
 COPY app.py .
 
