@@ -26,6 +26,9 @@ jobs:
       - name: Validar docker-compose.yml
         run: docker compose config --quiet
 
+      - name: Analisis estatico de los scripts (shellcheck)
+        run: shellcheck scripts/*.sh
+
       - name: Construir y levantar el stack (espera a healthchecks)
         run: docker compose up -d --build --wait --wait-timeout 180
 
@@ -65,6 +68,52 @@ jobs:
           after="$(docker compose exec -T db sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -tAc "SELECT count(*) FROM visits"')"
           echo "visitas tras reinicio: ${after}"
           [ "${after}" -eq "$(cat /tmp/visits_before_restart)" ]
+
+      - name: "Backup: crear, verificar checksums y rotar (conservar 3)"
+        run: |
+          for _ in 1 2 3 4 5; do
+            ./scripts/backup.sh -k 3
+            sleep 1.1
+          done
+          ls -la backups
+          [ "$(find backups -maxdepth 1 -name 'infralab_*.dump' | wc -l)" -eq 3 ]
+          [ "$(find backups -maxdepth 1 -name 'infralab_*.dump.sha256' | wc -l)" -eq 3 ]
+          [ -z "$(find backups -maxdepth 1 -name '*.partial')" ]
+          (cd backups && sha256sum --check ./*.sha256)
+
+      - name: "Backup: no se ejecutan dos a la vez"
+        run: |
+          mkdir backups/.backup.lock
+          if ./scripts/backup.sh -k 3; then
+            echo "ERROR: el backup deberia fallar con el lock tomado"
+            exit 1
+          fi
+          # El backup fallido no debe borrar el lock de otro proceso
+          rmdir backups/.backup.lock
+
+      - name: "Restore: recuperar los datos del ultimo backup"
+        run: |
+          count() {
+            docker compose exec -T db sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -tAc "SELECT count(*) FROM visits"'
+          }
+          ./scripts/backup.sh -k 3
+          expected="$(count)"
+          for _ in 1 2 3; do curl --fail --silent http://localhost:8080/ > /dev/null; done
+          [ "$(count)" -eq "$((expected + 3))" ]
+          ./scripts/restore.sh -y latest
+          restored="$(count)"
+          echo "visitas: backup=${expected} restaurado=${restored}"
+          [ "${restored}" -eq "${expected}" ]
+          curl --fail --silent --show-error http://localhost:8080/health
+
+      - name: "Restore: rechaza un backup danado"
+        run: |
+          latest="$(find backups -maxdepth 1 -name 'infralab_*.dump' | sort | tail -n 1)"
+          printf 'x' >> "${latest}"
+          if ./scripts/restore.sh -y latest; then
+            echo "ERROR: el restore deberia fallar con un checksum incorrecto"
+            exit 1
+          fi
 
       - name: Comprobar que /metrics no es accesible desde fuera
         run: |

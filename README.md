@@ -37,7 +37,8 @@ Proyecto de portfolio construido paso a paso; cada fase queda reflejada en el hi
           backend    -> web, db, postgres-exporter                 (internal)
           monitoring -> prometheus, grafana, web, ambos exporters  (internal)
 
-  backup.sh  ->  dump de db con rotacion   (fase 4)
+  scripts/backup.sh   ->  pg_dump de db + checksum + rotacion
+  scripts/restore.sh  ->  restauracion verificada en una sola transaccion
 ```
 
 | Servicio | Imagen | Redes | Puerto publicado |
@@ -107,7 +108,7 @@ docker run --rm -it --network infra-lab-monitoring -p 9090:9090 alpine/socat TCP
 - [x] CI: smoke test automatico en GitHub Actions
 - [x] Fase 2: base de datos PostgreSQL en red interna + app con contador de visitas
 - [x] Fase 3: Prometheus + Grafana con dashboard y alertas como codigo
-- [ ] Fase 4: script de backup con rotacion
+- [x] Fase 4: scripts de backup con rotacion y de restauracion
 - [ ] Fase 5: Makefile y documentacion final
 
 ## Requisitos
@@ -140,6 +141,48 @@ Borrar tambien los datos:
 docker compose down --volumes
 ```
 
+## Backups
+
+[`scripts/backup.sh`](scripts/backup.sh) hace un volcado de PostgreSQL y conserva solo los N mas
+recientes:
+
+```bash
+./scripts/backup.sh            # conserva los 7 ultimos (por defecto)
+./scripts/backup.sh -k 14      # conserva los 14 ultimos
+./scripts/backup.sh -d /ruta   # otra carpeta de destino
+```
+
+Que hace, paso a paso:
+
+1. Comprueba que `db` esta en marcha y toma un **lock** (`backups/.backup.lock`) para que no se
+   ejecuten dos backups a la vez.
+2. Ejecuta `pg_dump --format=custom` dentro del contenedor y lo escribe en un archivo `.partial`.
+3. **Verifica** que el volcado no esta vacio y que `pg_restore --list` puede leerlo.
+4. Solo entonces lo renombra a `infralab_<fecha UTC>.dump`: nunca queda un backup a medias con
+   nombre definitivo.
+5. Guarda su checksum en `infralab_<fecha UTC>.dump.sha256`.
+6. **Rotacion**: borra los backups que sobran, empezando por los mas antiguos.
+
+Los backups se crean con permisos `600` (solo los lee su propietario) y la carpeta `backups/`
+esta en `.gitignore`.
+
+Programarlo con cron (todos los dias a las 03:00):
+
+```cron
+0 3 * * * /ruta/a/infra-lab/scripts/backup.sh >> /ruta/a/infra-lab/backups/backup.log 2>&1
+```
+
+### Restauracion
+
+[`scripts/restore.sh`](scripts/restore.sh) comprueba el checksum, pide confirmacion y restaura con
+`pg_restore --single-transaction`: si algo falla a mitad, la base de datos queda como estaba.
+
+```bash
+./scripts/restore.sh latest                                  # el backup mas reciente
+./scripts/restore.sh backups/infralab_20261113T030000Z.dump  # uno concreto
+./scripts/restore.sh -y latest                               # sin confirmacion (scripts/CI)
+```
+
 ## Integracion continua
 
 Cada push a `main` ejecuta [`.github/workflows/ci.yml`](.github/workflows/ci.yml) en GitHub Actions,
@@ -158,6 +201,11 @@ que construye y levanta el stack en un runner limpio y comprueba que:
 - las redes `backend` y `monitoring` son internas y el proxy **no** puede resolver ni la base de
   datos ni Prometheus
 - ningun servicio salvo el proxy publica puertos
+- los scripts pasan `shellcheck`
+- `backup.sh` crea backups validos con checksum, rota correctamente (5 ejecuciones con `-k 3`
+  dejan 3) y se niega a ejecutarse si otro backup tiene el lock
+- `restore.sh` devuelve la base de datos exactamente al estado del backup y rechaza un backup
+  danado
 
 ## Estructura
 
@@ -176,6 +224,9 @@ que construye y levanta el stack en un runner limpio y comprueba que:
 ├── db/
 │   └── init/
 │       └── 01-schema.sql   # esquema inicial (se ejecuta solo con el volumen vacio)
+├── scripts/
+│   ├── backup.sh           # pg_dump + verificacion + checksum + rotacion
+│   └── restore.sh          # restauracion verificada y transaccional
 └── monitoring/
     ├── prometheus/
     │   ├── prometheus.yml  # targets a monitorizar
