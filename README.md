@@ -1,6 +1,7 @@
 # infra-lab
 
 [![CI](https://github.com/abdark0u/infra-lab/actions/workflows/ci.yml/badge.svg)](https://github.com/abdark0u/infra-lab/actions/workflows/ci.yml)
+[![Security](https://github.com/abdark0u/infra-lab/actions/workflows/security.yml/badge.svg)](https://github.com/abdark0u/infra-lab/actions/workflows/security.yml)
 
 Laboratorio de infraestructura con **Docker Compose**: un proxy inverso Nginx delante de una app
 web, una base de datos PostgreSQL aislada en una red interna, monitorización con Prometheus y
@@ -22,6 +23,7 @@ stack en marcha y tráfico simulado.</sub>
 | Observabilidad | Prometheus con 4 fuentes de métricas, dashboard de Grafana y reglas de alerta, todo como código |
 | Backups | Volcados verificados con checksum, rotación, bloqueo contra ejecuciones simultáneas y restauración transaccional |
 | CI/CD | GitHub Actions levanta el stack completo y ejecuta 20 bloques de comprobaciones en cada push |
+| Seguridad de imágenes | Trivy en cada push y cada lunes: vulnerabilidades, Dockerfile y secretos; la imagen propia está sin vulnerabilidades graves con parche |
 | Automatización | Makefile para el día a día y generación de contraseñas aleatorias |
 
 ## Arquitectura
@@ -90,7 +92,8 @@ Líneas continuas: tráfico de la aplicación. Líneas discontinuas: recogida de
   base de datos) → `proxy`. Cada servicio espera a que el anterior esté sano.
 - **Secretos fuera del repo**: las credenciales viven en `.env`, que git ignora. `make env` lo crea
   con contraseñas aleatorias y Compose se niega a arrancar si falta alguna.
-- **App sin privilegios**: la imagen de `web` ejecuta Gunicorn con un usuario sin root.
+- **Imagen de la app mínima**: `web` ejecuta Gunicorn con un usuario sin root, aplica los parches
+  de seguridad de Debian al construirse y no incluye pip (solo hace falta para instalar).
 - **`/metrics` no se expone**: el proxy devuelve `404` en `/metrics`; Prometheus lee las métricas
   de la app directamente por la red `monitoring`.
 - **Todo como código**: el datasource y el dashboard de Grafana se cargan por *provisioning* desde
@@ -131,6 +134,7 @@ espera a que todos los servicios estén sanos.
 | `make logs` | Logs en vivo (`S=web` para ver solo un servicio) |
 | `make health` | Comprueba proxy, app y Grafana a través del proxy |
 | `make lint` | Valida Compose, scripts (`shellcheck`), Prometheus (`promtool`) y el JSON del dashboard |
+| `make scan` | Escaneo de seguridad con Trivy (ver [Seguridad](#seguridad-trivy)) |
 | `make backup` | Backup de PostgreSQL con rotación (`KEEP=14` para conservar 14) |
 | `make restore` | Restaura un backup (`FILE=ruta` o `latest`; `YES=1` sin confirmación) |
 | `make clean` | Para el stack y **borra** todos los datos (pide confirmación) |
@@ -207,11 +211,38 @@ datos queda como estaba.
 ./scripts/restore.sh -y latest                               # sin confirmación (scripts/CI)
 ```
 
+## Seguridad (Trivy)
+
+[`scripts/security-scan.sh`](scripts/security-scan.sh) (o `make scan`) ejecuta
+[Trivy](https://trivy.dev) en Docker, así que no hay que instalarlo. La política separa lo que
+depende de este repo de lo que no:
+
+| Comprobación | Si encuentra algo |
+|--------------|-------------------|
+| Imagen propia `web`: vulnerabilidades HIGH o CRITICAL con parche disponible | **Falla** |
+| Dockerfile de la app: errores de configuración HIGH o CRITICAL | **Falla** |
+| Secretos (claves, tokens) en los archivos del repositorio | **Falla** |
+| Imágenes de terceros (nginx, postgres, Grafana…): vulnerabilidades con parche | Solo informa: se corrigen subiendo de versión |
+
+Se ejecuta en cada push y también cada lunes, porque aparecen vulnerabilidades nuevas aunque el
+código no cambie. Los resultados quedan en el resumen de cada ejecución del workflow
+[Security](.github/workflows/security.yml).
+
+**Primer escaneo**: la imagen `web` tenía 7 vulnerabilidades HIGH, ninguna en el código de la app:
+
+- 2 en `zlib` (Debian): ya parcheadas por Debian, pero aún no incluidas en `python:3.13-slim`. Se
+  corrigieron aplicando las actualizaciones de seguridad al construir la imagen.
+- 5 en librerías que pip lleva dentro (`msgpack`, `urllib3`, `setuptools`). pip solo se usa para
+  instalar las dependencias, así que se desinstala después y no queda en la imagen.
+
+Resultado: 0 vulnerabilidades graves con parche en la imagen propia.
+
 ## Integración continua
 
 | Workflow | Cuándo | Qué hace |
 |----------|--------|----------|
 | [CI](.github/workflows/ci.yml) | Cada push a `main` y cada pull request | Levanta el stack en un runner limpio y lo prueba entero |
+| [Security](.github/workflows/security.yml) | Cada push, cada pull request y cada lunes | Escaneo de seguridad con Trivy (`make scan`) |
 | [Screenshots](.github/workflows/screenshots.yml) | A mano | Genera tráfico, abre la app y Grafana en Chromium y guarda las capturas de este README |
 
 La CI usa los mismos comandos `make` que se usan en local y comprueba que:
@@ -241,6 +272,7 @@ La CI usa los mismos comandos `make` que se usan en local y comprueba que:
 ├── .github/
 │   ├── workflows/
 │   │   ├── ci.yml          # prueba completa del stack en cada push
+│   │   ├── security.yml    # escaneo con Trivy (push, PR y cada lunes)
 │   │   └── screenshots.yml # capturas para el README (manual)
 │   └── scripts/
 │       └── capture-screenshots.mjs
@@ -263,6 +295,7 @@ La CI usa los mismos comandos `make` que se usan en local y comprueba que:
 │           └── infra-lab-overview.json
 ├── scripts/
 │   ├── init-env.sh         # crea .env con contraseñas aleatorias
+│   ├── security-scan.sh    # escaneo de seguridad con Trivy
 │   ├── backup.sh           # pg_dump + verificación + checksum + rotación
 │   └── restore.sh          # restauración verificada y transaccional
 └── docs/img/               # capturas del README
@@ -278,6 +311,7 @@ siguiente:
 3. Prometheus + Grafana con dashboard y alertas como código
 4. Scripts de backup con rotación y de restauración
 5. Makefile, contraseñas aleatorias, capturas y documentación
+6. Escaneo de seguridad con Trivy y corrección de lo que encontró en la imagen de la app
 
 ## Limitaciones y próximos pasos
 
@@ -291,4 +325,6 @@ siguiente:
 - **Escalado de la app**: Gunicorn usa un solo proceso (con 4 hilos) para que las métricas en
   memoria sean completas; con varios procesos haría falta el modo multiproceso de
   `prometheus_client`.
-- **Seguridad de las imágenes**: añadir un escáner de vulnerabilidades como Trivy a la CI.
+- **Imágenes de terceros desactualizadas**: Trivy informa de vulnerabilidades con parche en las
+  versiones fijadas de nginx, PostgreSQL, Prometheus, Grafana y los exporters. El siguiente paso es
+  subirlas a sus últimas versiones y comprobar con la CI que todo sigue funcionando.
