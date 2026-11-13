@@ -106,12 +106,12 @@ def health():
         with pool.connection(timeout=3) as conn:
             conn.execute("SELECT 1")
     except psycopg.Error:
-        logger.exception("Health check: database unreachable")
+        logger.exception("Healthcheck: no se puede conectar con la base de datos")
         return jsonify(status="error", database="unreachable"), 503
     return jsonify(status="ok", database="ok")
 
 
 @app.errorhandler(psycopg.Error)
 def database_error(error: psycopg.Error):
-    logger.error("Database error: %s", error)
+    logger.error("Error de la base de datos: %s", error)
     return jsonify(status="error", detail="database unavailable"), 503
