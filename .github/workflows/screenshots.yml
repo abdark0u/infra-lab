@@ -55,28 +55,41 @@ jobs:
           # Esperar a que Prometheus haga un ultimo scrape
           sleep 20
 
-      - name: Instalar Chromium (Playwright)
-        run: npx --yes "playwright@${PLAYWRIGHT_VERSION}" install --with-deps chromium
-
-      - name: Hacer las capturas
+      - name: "Diagnostico: HTML y recursos de Grafana a traves del proxy"
         run: |
-          mkdir -p screenshots
-          shot() {
-            npx --yes "playwright@${PLAYWRIGHT_VERSION}" screenshot --browser chromium \
-              --viewport-size "$1" --wait-for-timeout 15000 "$2" "$3"
-          }
-          shot "1600, 960" \
-            "http://localhost:8080/grafana/d/infra-lab-overview/infra-lab-overview?orgId=1&from=now-3m&to=now&kiosk" \
-            screenshots/grafana-dashboard.png
-          shot "1100, 560" "http://localhost:8080/" screenshots/web.png
-          ls -la screenshots
+          html="$(curl -fsS http://localhost:8080/grafana/login)"
+          echo "${html}" | grep -oE '<base [^>]*>' || echo "(sin <base>)"
+          echo "${html}" | grep -oE '(src|href)="[^"]*public/build/[^"]*"' | head -n 8 | while read -r attr; do
+            path="${attr#*=\"}"; path="${path%\"}"
+            case "${path}" in
+              http*) url="${path}" ;;
+              /*) url="http://localhost:8080${path}" ;;
+              *) url="http://localhost:8080/grafana/${path}" ;;
+            esac
+            printf '%s  ->  %s\n' "${path}" \
+              "$(curl -s -o /dev/null -w '%{http_code} %{content_type} %{size_download}B' "${url}")"
+          done
+
+      - name: Instalar Playwright y Chromium
+        working-directory: ${{ runner.temp }}
+        run: |
+          mkdir -p playwright && cd playwright
+          npm init -y > /dev/null
+          npm install --no-audit --no-fund "playwright@${PLAYWRIGHT_VERSION}"
+          npx playwright install --with-deps chromium
+
+      - name: Hacer las capturas (espera a que las graficas esten dibujadas)
+        run: |
+          cp .github/scripts/capture-screenshots.mjs "${RUNNER_TEMP}/playwright/"
+          OUT_DIR="${GITHUB_WORKSPACE}/screenshots" node "${RUNNER_TEMP}/playwright/capture-screenshots.mjs"
 
       - name: Subir capturas como artefacto
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: screenshots
           path: screenshots/
-          if-no-files-found: error
+          if-no-files-found: warn
 
       - name: Logs de los contenedores (si algo falla)
         if: failure()
