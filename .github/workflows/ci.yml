@@ -1,0 +1,57 @@
+name: CI
+
+# Levanta el stack completo en un runner de GitHub y comprueba que responde.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  smoke-test:
+    name: Smoke test (docker compose)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Preparar .env desde la plantilla
+        run: cp .env.example .env
+
+      - name: Validar docker-compose.yml
+        run: docker compose config --quiet
+
+      - name: Levantar el stack
+        run: docker compose up -d --wait --wait-timeout 60
+
+      - name: Validar configuracion de Nginx
+        run: docker compose exec -T proxy nginx -t
+
+      - name: Comprobar /healthz del proxy
+        run: |
+          curl --fail --silent --show-error --retry 10 --retry-delay 2 --retry-all-errors \
+            http://localhost:8080/healthz | grep -qx "ok"
+
+      - name: Comprobar que la web llega a traves del proxy
+        run: |
+          curl --fail --silent --show-error --retry 10 --retry-delay 2 --retry-all-errors \
+            http://localhost:8080/ | grep -q "infra-lab funciona"
+
+      - name: Comprobar que la web no esta expuesta directamente
+        run: |
+          bindings="$(docker inspect infra-lab-web --format '{{json .HostConfig.PortBindings}}')"
+          echo "PortBindings de web: ${bindings}"
+          [ "${bindings}" = "{}" ] || [ "${bindings}" = "null" ]
+
+      - name: Logs de los contenedores (si algo falla)
+        if: failure()
+        run: docker compose logs --no-color
+
+      - name: Parar el stack
+        if: always()
+        run: docker compose down --volumes
