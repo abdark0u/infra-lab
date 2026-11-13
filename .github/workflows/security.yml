@@ -1,0 +1,28 @@
+name: Security
+
+# Escaneo de seguridad con Trivy (scripts/security-scan.sh).
+# Ademas de en cada push, se ejecuta cada lunes: aparecen vulnerabilidades
+# nuevas aunque el codigo no cambie.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  trivy:
+    name: Trivy (imagen, Dockerfile, secretos y terceros)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Escaneo de seguridad (make scan)
+        run: make scan

@@ -15,7 +15,7 @@ FILE ?= latest
 YES ?=
 S ?=
 
-.PHONY: help env up down restart ps logs health lint backup restore clean
+.PHONY: help env up down restart ps logs health lint scan backup restore clean
 
 help: ## Muestra esta ayuda
 	@echo "Uso: make <comando> [VARIABLE=valor]"
@@ -66,6 +66,9 @@ lint: ## Valida compose, scripts, Prometheus y el dashboard de Grafana
 	@echo "==> JSON del dashboard"
 	@python3 -m json.tool $(DASHBOARD) > /dev/null
 	@echo "lint OK"
+
+scan: ## Escanea con Trivy vulnerabilidades, configuracion y secretos
+	./scripts/security-scan.sh
 
 backup: ## Backup de PostgreSQL con rotacion (KEEP=N backups a conservar)
 	./scripts/backup.sh -k $(KEEP)
