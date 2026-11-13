@@ -1,6 +1,7 @@
 name: CI
 
-# Levanta el stack completo en un runner de GitHub y comprueba que responde.
+# Levanto el stack entero en un runner limpio de GitHub y lo pruebo como si lo usara
+# alguien de verdad. Si un cambio rompe algo, el push sale en rojo.
 on:
   push:
     branches: [main]
@@ -28,7 +29,7 @@ jobs:
             exit 1
           fi
           [ "$(stat -c '%a' .env)" = "600" ]
-          # Ejecutarlo otra vez no debe sobrescribir el .env existente
+          # Repetirlo no puede machacar el .env: la db se queda con la contraseña de la primera vez
           checksum="$(sha256sum .env)"
           make env
           [ "$(sha256sum .env)" = "${checksum}" ]
@@ -94,7 +95,7 @@ jobs:
             echo "ERROR: el backup deberia fallar con el lock tomado"
             exit 1
           fi
-          # El backup fallido no debe borrar el lock de otro proceso
+          # Un backup que falla no puede borrar el lock de otro proceso que sí está trabajando
           rmdir backups/.backup.lock
 
       - name: "Restore: recuperar los datos del ultimo backup"
@@ -172,7 +173,7 @@ jobs:
       - name: "Grafana: la interfaz carga todos sus ficheros a traves del proxy"
         run: |
           html="$(curl --fail --silent --show-error http://localhost:8080/grafana/login)"
-          # Con serve_from_sub_path, los recursos son relativos a <base href="/grafana/">
+          # Con serve_from_sub_path, los ficheros cuelgan de <base href="/grafana/">
           echo "${html}" | grep -q '<base href="/grafana/"'
           assets="$(echo "${html}" | grep -oE '(src|href)="public/build/[^"]+\.(js|css)"' | cut -d'"' -f2)"
           [ -n "${assets}" ]
@@ -191,13 +192,14 @@ jobs:
       - name: Comprobar aislamiento de red
         run: |
           set -x
-          # Las redes backend y monitoring son internas (sin salida a Internet)
+          # backend y monitoring son redes internas: no tienen salida a Internet
           [ "$(docker network inspect infra-lab-backend --format '{{.Internal}}')" = "true" ]
           [ "$(docker network inspect infra-lab-monitoring --format '{{.Internal}}')" = "true" ]
-          # El proxy ve a la web y a Grafana...
+          # El proxy tiene que ver a la web y a Grafana...
           docker compose exec -T proxy getent hosts web
           docker compose exec -T proxy getent hosts grafana
-          # ...pero no a la base de datos ni a Prometheus (no comparten red)
+          # ...pero no a la base de datos ni a Prometheus (no comparten red). Si alguien
+          # se hiciera con el proxy, no podría llegar a ellos directamente
           for host in db prometheus; do
             if docker compose exec -T proxy getent hosts "${host}"; then
               echo "ERROR: el proxy puede resolver ${host}"

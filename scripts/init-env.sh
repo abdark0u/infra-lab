@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Crea .env a partir de .env.example, sustituyendo cada valor "change-me-please"
-# por una contrasena aleatoria. Nunca sobrescribe un .env existente.
+# Crea el .env a partir de .env.example y cambia cada "change-me-please" por una
+# contraseña aleatoria, para que nadie arranque el stack con contraseñas por defecto.
+# Nunca machaca un .env que ya exista.
 #
 # Uso: scripts/init-env.sh   (o: make env)
 set -Eeuo pipefail
@@ -30,7 +31,7 @@ cleanup() {
 }
 
 generate_secret() {
-    # 24 bytes aleatorios en hexadecimal (48 caracteres), sin depender de openssl
+    # 24 bytes de /dev/urandom en hexadecimal (48 caracteres), así no dependo de openssl
     od -An -vtx1 -N24 /dev/urandom | tr -d ' \n'
 }
 

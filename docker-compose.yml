@@ -1,7 +1,7 @@
 name: infra-lab
 
 services:
-  # Proxy inverso: unico servicio con puerto publicado
+  # Proxy inverso: la única puerta de entrada y el único servicio con un puerto publicado
   proxy:
     image: nginx:1.30.6-alpine
     container_name: infra-lab-proxy
@@ -23,8 +23,8 @@ services:
       - frontend
     restart: unless-stopped
 
-  # App web (Python + Flask): la ve el proxy por "frontend", habla con la db por "backend"
-  # y expone /metrics a Prometheus por "monitoring"
+  # App web (Python + Flask). Está en tres redes: el proxy la ve por "frontend", ella habla
+  # con la db por "backend" y Prometheus le lee /metrics por "monitoring"
   web:
     build: ./web
     image: infra-lab-web:local
@@ -49,7 +49,7 @@ services:
       - monitoring
     restart: unless-stopped
 
-  # Base de datos: solo en la red interna, sin puertos publicados
+  # Base de datos: solo en la red interna y sin puertos publicados. Desde fuera no se llega
   db:
     image: postgres:17-alpine
     container_name: infra-lab-db
@@ -69,7 +69,7 @@ services:
       - backend
     restart: unless-stopped
 
-  # ---------- Monitorizacion ----------
+  # ---------- Monitorización ----------
 
   prometheus:
     image: prom/prometheus:v3.15.1
@@ -96,7 +96,7 @@ services:
     environment:
       GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
       GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?Define GRAFANA_ADMIN_PASSWORD en .env}
-      # Servida por el proxy en /grafana/
+      # Va detrás del proxy, en /grafana/
       GF_SERVER_ROOT_URL: http://localhost:${PROXY_HTTP_PORT:-8080}/grafana/
       GF_SERVER_SERVE_FROM_SUB_PATH: "true"
       GF_USERS_ALLOW_SIGN_UP: "false"
@@ -123,7 +123,7 @@ services:
       - monitoring
     restart: unless-stopped
 
-  # Traduce /stub_status de Nginx a metricas de Prometheus
+  # Pasa el /stub_status de Nginx a métricas que entiende Prometheus
   nginx-exporter:
     image: nginx/nginx-prometheus-exporter:1.5.3
     container_name: infra-lab-nginx-exporter
@@ -137,7 +137,7 @@ services:
       - monitoring
     restart: unless-stopped
 
-  # Lee estadisticas de PostgreSQL por la red interna
+  # Saca estadísticas de PostgreSQL por la red interna
   postgres-exporter:
     image: prometheuscommunity/postgres-exporter:v0.20.1
     container_name: infra-lab-postgres-exporter
@@ -156,7 +156,8 @@ services:
 networks:
   frontend:
     name: infra-lab-frontend
-  # internal: true -> sin salida a Internet y sin acceso desde el host
+  # internal: true -> sin salida a Internet y sin acceso desde el host. Así la db (que solo
+  # está en "backend") no puede conectarse fuera ni aunque alguien la comprometa
   backend:
     name: infra-lab-backend
     internal: true

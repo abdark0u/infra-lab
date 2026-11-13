@@ -1,11 +1,11 @@
-# Atajos para trabajar con infra-lab.
-# Ejecuta `make` (o `make help`) para ver todos los comandos.
+# Atajos para el día a día con infra-lab, para no tener que acordarme de los comandos
+# largos de docker compose. Ejecuta `make` (o `make help`) para verlos todos.
 
 SHELL := /bin/bash
 .DEFAULT_GOAL := help
 
 COMPOSE := docker compose
-# La validacion estatica usa la plantilla: no necesita un .env real
+# Para validar uso la plantilla, así no hace falta un .env con contraseñas de verdad
 COMPOSE_LINT := docker compose --env-file .env.example
 SHELLCHECK_IMAGE := koalaman/shellcheck:v0.10.0
 DASHBOARD := monitoring/grafana/dashboards/infra-lab-overview.json
