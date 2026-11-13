@@ -237,6 +237,30 @@ código no cambie. Los resultados quedan en el resumen de cada ejecución del wo
 
 Resultado: 0 vulnerabilidades graves con parche en la imagen propia.
 
+**Imágenes de terceros**: Trivy también encontró vulnerabilidades con parche en las versiones
+fijadas de nginx, Prometheus, Grafana y los exporters. Se subieron a su última versión estable con
+al menos dos semanas de antigüedad (margen para que salgan a la luz los fallos de una versión recién
+publicada), después de comprobar en sus notas de versión que ningún cambio incompatible afectaba a
+la configuración del repo. La CI completa pasó con las versiones nuevas.
+
+| Servicio | Versión | CRITICAL | HIGH |
+|----------|---------|----------|------|
+| `grafana` | `12.1.1` → `13.3.0` | 14 → 0 | 175 → 54 |
+| `prometheus` | `v3.5.0` → `v3.15.1` | 4 → 0 | 104 → 2 |
+| `proxy` (nginx) | `1.27-alpine` → `1.30.6-alpine` | 3 → 0 | 67 → 3 |
+| `postgres-exporter` | `v0.17.1` → `v0.20.1` | 1 → 0 | 48 → 19 |
+| `nginx-exporter` | `1.4.2` → `1.5.3` | 1 → 0 | 46 → 8 |
+| `db` (PostgreSQL) | `17-alpine` (sin cambios) | 1 → 1 | 25 → 25 |
+| **Total** | | **24 → 1** | **465 → 111** |
+
+PostgreSQL se queda en `17-alpine` porque esa etiqueta ya apunta a la última versión 17.x (la
+17.12, publicada el 12 de noviembre de 2026 con 48 correcciones de seguridad). Fijar la 17.11 para
+respetar el margen de dos semanas habría quitado esas correcciones, y pasar a la 18 obligaría a
+migrar los datos, porque PostgreSQL 18 no abre directamente los volúmenes de la 17.
+
+Las vulnerabilidades que quedan dependen de que cada proyecto publique versiones corregidas; el
+escaneo de cada lunes mantiene la lista al día.
+
 ## Integración continua
 
 | Workflow | Cuándo | Qué hace |
@@ -312,6 +336,8 @@ siguiente:
 4. Scripts de backup con rotación y de restauración
 5. Makefile, contraseñas aleatorias, capturas y documentación
 6. Escaneo de seguridad con Trivy y corrección de lo que encontró en la imagen de la app
+7. Actualización de las imágenes de terceros a su última versión estable, comprobada con la CI y
+   con Trivy
 
 ## Limitaciones y próximos pasos
 
@@ -325,6 +351,3 @@ siguiente:
 - **Escalado de la app**: Gunicorn usa un solo proceso (con 4 hilos) para que las métricas en
   memoria sean completas; con varios procesos haría falta el modo multiproceso de
   `prometheus_client`.
-- **Imágenes de terceros desactualizadas**: Trivy informa de vulnerabilidades con parche en las
-  versiones fijadas de nginx, PostgreSQL, Prometheus, Grafana y los exporters. El siguiente paso es
-  subirlas a sus últimas versiones y comprobar con la CI que todo sigue funcionando.
