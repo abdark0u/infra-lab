@@ -15,7 +15,7 @@
       "id": 1,
       "type": "stat",
       "title": "Servicios monitorizados",
-      "description": "1 = Prometheus puede leer sus metricas, 0 = caido",
+      "description": "1 = Prometheus puede leer sus métricas, 0 = caído",
       "gridPos": { "h": 5, "w": 18, "x": 0, "y": 0 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
@@ -59,7 +59,7 @@
     {
       "id": 2,
       "type": "stat",
-      "title": "Visitas (ultima hora)",
+      "title": "Visitas (última hora)",
       "gridPos": { "h": 5, "w": 6, "x": 18, "y": 0 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
@@ -146,7 +146,7 @@
     {
       "id": 6,
       "type": "timeseries",
-      "title": "PostgreSQL: tamano de la base de datos",
+      "title": "PostgreSQL: tamaño de la base de datos",
       "gridPos": { "h": 8, "w": 12, "x": 12, "y": 13 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [

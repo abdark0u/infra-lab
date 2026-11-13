@@ -20,23 +20,30 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v5
 
-      - name: Preparar .env desde la plantilla
-        run: cp .env.example .env
+      - name: "make env: .env con contrasenas aleatorias"
+        run: |
+          make env
+          if grep -q 'change-me-please' .env; then
+            echo "ERROR: .env conserva contrasenas por defecto"
+            exit 1
+          fi
+          [ "$(stat -c '%a' .env)" = "600" ]
+          # Ejecutarlo otra vez no debe sobrescribir el .env existente
+          checksum="$(sha256sum .env)"
+          make env
+          [ "$(sha256sum .env)" = "${checksum}" ]
 
-      - name: Validar docker-compose.yml
-        run: docker compose config --quiet
+      - name: "make lint: compose, shellcheck, promtool y dashboard"
+        run: make lint
 
-      - name: Analisis estatico de los scripts (shellcheck)
-        run: shellcheck scripts/*.sh
+      - name: "make up: construir y levantar el stack (espera a healthchecks)"
+        run: make up
 
-      - name: Construir y levantar el stack (espera a healthchecks)
-        run: docker compose up -d --build --wait --wait-timeout 180
+      - name: "make health: endpoints de salud a traves del proxy"
+        run: make health
 
-      - name: Validar configuracion de Nginx
+      - name: Validar configuracion de Nginx en ejecucion
         run: docker compose exec -T proxy nginx -t
-
-      - name: Validar configuracion y alertas de Prometheus
-        run: docker compose exec -T prometheus promtool check config /etc/prometheus/prometheus.yml
 
       - name: Comprobar /healthz del proxy
         run: |
@@ -61,10 +68,9 @@ jobs:
           [ "${after}" -eq "$((before + 2))" ]
           echo "${after}" > /tmp/visits_before_restart
 
-      - name: Comprobar que los datos sobreviven a un reinicio (volumen)
+      - name: "Comprobar que los datos sobreviven a un reinicio (make restart)"
         run: |
-          docker compose down
-          docker compose up -d --wait --wait-timeout 180
+          make restart
           after="$(docker compose exec -T db sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -tAc "SELECT count(*) FROM visits"')"
           echo "visitas tras reinicio: ${after}"
           [ "${after}" -eq "$(cat /tmp/visits_before_restart)" ]
@@ -72,7 +78,7 @@ jobs:
       - name: "Backup: crear, verificar checksums y rotar (conservar 3)"
         run: |
           for _ in 1 2 3 4 5; do
-            ./scripts/backup.sh -k 3
+            make backup KEEP=3
             sleep 1.1
           done
           ls -la backups
@@ -96,11 +102,11 @@ jobs:
           count() {
             docker compose exec -T db sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -tAc "SELECT count(*) FROM visits"'
           }
-          ./scripts/backup.sh -k 3
+          make backup KEEP=3
           expected="$(count)"
           for _ in 1 2 3; do curl --fail --silent http://localhost:8080/ > /dev/null; done
           [ "$(count)" -eq "$((expected + 3))" ]
-          ./scripts/restore.sh -y latest
+          make restore FILE=latest YES=1
           restored="$(count)"
           echo "visitas: backup=${expected} restaurado=${restored}"
           [ "${restored}" -eq "${expected}" ]

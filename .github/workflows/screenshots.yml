@@ -1,0 +1,86 @@
+name: Screenshots
+
+# Genera capturas reales del stack en marcha para el README.
+# Se lanza a mano desde la pestana Actions (o con: gh workflow run screenshots.yml)
+# y deja las imagenes como artefacto descargable.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  PLAYWRIGHT_VERSION: "1.54.1"
+
+jobs:
+  screenshots:
+    name: Capturas de la web y de Grafana
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Crear .env
+        run: make env
+
+      - name: Permitir lectura anonima de Grafana (solo en este job)
+        run: |
+          cat > "${RUNNER_TEMP}/grafana-anonymous.yml" <<'EOF'
+          services:
+            grafana:
+              environment:
+                GF_AUTH_ANONYMOUS_ENABLED: "true"
+                GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+          EOF
+
+      - name: Levantar el stack
+        run: |
+          docker compose -f docker-compose.yml -f "${RUNNER_TEMP}/grafana-anonymous.yml" \
+            up -d --build --wait --wait-timeout 180
+
+      - name: Generar trafico durante 150 segundos
+        run: |
+          end=$((SECONDS + 150))
+          while [ "${SECONDS}" -lt "${end}" ]; do
+            curl --silent --output /dev/null http://localhost:8080/
+            curl --silent --output /dev/null http://localhost:8080/health
+            if [ $((RANDOM % 6)) -eq 0 ]; then
+              curl --silent --output /dev/null http://localhost:8080/no-existe
+            fi
+            sleep "0.$((RANDOM % 8 + 2))"
+          done
+          # Esperar a que Prometheus haga un ultimo scrape
+          sleep 20
+
+      - name: Instalar Chromium (Playwright)
+        run: npx --yes "playwright@${PLAYWRIGHT_VERSION}" install --with-deps chromium
+
+      - name: Hacer las capturas
+        run: |
+          mkdir -p screenshots
+          shot() {
+            npx --yes "playwright@${PLAYWRIGHT_VERSION}" screenshot --browser chromium \
+              --viewport-size "$1" --wait-for-timeout 15000 "$2" "$3"
+          }
+          shot "1600, 960" \
+            "http://localhost:8080/grafana/d/infra-lab-overview/infra-lab-overview?orgId=1&from=now-3m&to=now&kiosk" \
+            screenshots/grafana-dashboard.png
+          shot "1100, 560" "http://localhost:8080/" screenshots/web.png
+          ls -la screenshots
+
+      - name: Subir capturas como artefacto
+        uses: actions/upload-artifact@v4
+        with:
+          name: screenshots
+          path: screenshots/
+          if-no-files-found: error
+
+      - name: Logs de los contenedores (si algo falla)
+        if: failure()
+        run: docker compose logs --no-color
+
+      - name: Parar el stack
+        if: always()
+        run: docker compose down --volumes

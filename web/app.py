@@ -29,7 +29,7 @@ PAGE = """<!doctype html>
   <h1>infra-lab funciona</h1>
   <p>Visitas registradas en PostgreSQL:</p>
   <p class="visits" id="visits">{{ visits }}</p>
-  <p>Recorrido de esta peticion: <code>proxy</code> (Nginx) &rarr; <code>web</code> (Flask) &rarr; <code>db</code> (PostgreSQL, red interna).</p>
+  <p>Recorrido de esta petición: <code>proxy</code> (Nginx) &rarr; <code>web</code> (Flask) &rarr; <code>db</code> (PostgreSQL, red interna).</p>
 </body>
 </html>
 """
