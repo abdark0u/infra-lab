@@ -1,0 +1,18 @@
+# Secretos y configuracion local
+.env
+*.env.local
+
+# Datos generados por los contenedores
+data/
+backups/
+*.sql.gz
+*.dump
+
+# Sistema / editores
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# Notas privadas
+docs/notes/
