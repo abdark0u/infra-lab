@@ -18,4 +18,6 @@ USER appuser
 
 EXPOSE 8000
 
-CMD ["gunicorn", "--bind", "0.0.0.0:8000", "--workers", "2", "--access-logfile", "-", "app:app"]
+# Un solo proceso con varios hilos: las metricas de prometheus_client viven en memoria
+# del proceso, asi /metrics siempre devuelve los totales completos.
+CMD ["gunicorn", "--bind", "0.0.0.0:8000", "--workers", "1", "--worker-class", "gthread", "--threads", "4", "--access-logfile", "-", "app:app"]

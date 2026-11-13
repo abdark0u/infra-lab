@@ -27,10 +27,13 @@ jobs:
         run: docker compose config --quiet
 
       - name: Construir y levantar el stack (espera a healthchecks)
-        run: docker compose up -d --build --wait --wait-timeout 120
+        run: docker compose up -d --build --wait --wait-timeout 180
 
       - name: Validar configuracion de Nginx
         run: docker compose exec -T proxy nginx -t
+
+      - name: Validar configuracion y alertas de Prometheus
+        run: docker compose exec -T prometheus promtool check config /etc/prometheus/prometheus.yml
 
       - name: Comprobar /healthz del proxy
         run: |
@@ -58,28 +61,81 @@ jobs:
       - name: Comprobar que los datos sobreviven a un reinicio (volumen)
         run: |
           docker compose down
-          docker compose up -d --wait --wait-timeout 120
+          docker compose up -d --wait --wait-timeout 180
           after="$(docker compose exec -T db sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -tAc "SELECT count(*) FROM visits"')"
           echo "visitas tras reinicio: ${after}"
           [ "${after}" -eq "$(cat /tmp/visits_before_restart)" ]
 
+      - name: Comprobar que /metrics no es accesible desde fuera
+        run: |
+          code="$(curl --silent --output /dev/null --write-out '%{http_code}' http://localhost:8080/metrics)"
+          echo "GET /metrics -> ${code}"
+          [ "${code}" = "404" ]
+
+      - name: "Prometheus: todos los targets en estado up"
+        run: |
+          for _ in $(seq 1 24); do
+            status="$(docker compose exec -T prometheus wget -qO- 'http://127.0.0.1:9090/api/v1/targets?state=active' \
+              | jq -r '.data.activeTargets[] | "\(.labels.job)=\(.health)"' | sort)"
+            echo "${status}" && echo "---"
+            if [ "$(echo "${status}" | grep -c '=up$')" -eq 4 ]; then
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "ERROR: no todos los targets estan up"
+          exit 1
+
+      - name: "Prometheus: metricas de app, Nginx y PostgreSQL"
+        run: |
+          prom_query() {
+            docker compose exec -T prometheus wget -qO- --post-data "query=$1" http://127.0.0.1:9090/api/v1/query
+          }
+          for q in 'sum(infralab_http_requests_total) > 0' 'nginx_up == 1' 'pg_up == 1'; do
+            for _ in $(seq 1 12); do
+              if prom_query "${q}" | jq -e '.data.result | length > 0' > /dev/null; then
+                echo "OK: ${q}"
+                continue 2
+              fi
+              sleep 5
+            done
+            echo "ERROR: la consulta '${q}' no devuelve resultados"
+            exit 1
+          done
+
+      - name: "Grafana: salud, datasource y dashboard a traves del proxy"
+        run: |
+          set -a && . ./.env && set +a
+          auth="${GRAFANA_ADMIN_USER}:${GRAFANA_ADMIN_PASSWORD}"
+          base="http://localhost:8080/grafana"
+          curl --fail --silent --show-error "${base}/api/health" | jq -e '.database == "ok"'
+          curl --fail --silent --show-error -u "${auth}" "${base}/api/datasources/uid/prometheus/health" \
+            | jq -e '.status == "OK"'
+          curl --fail --silent --show-error -u "${auth}" "${base}/api/dashboards/uid/infra-lab-overview" \
+            | jq -e '.dashboard.title'
+
       - name: Comprobar aislamiento de red
         run: |
           set -x
-          # La red backend es interna (sin salida a Internet)
+          # Las redes backend y monitoring son internas (sin salida a Internet)
           [ "$(docker network inspect infra-lab-backend --format '{{.Internal}}')" = "true" ]
-          # El proxy ve a la web...
+          [ "$(docker network inspect infra-lab-monitoring --format '{{.Internal}}')" = "true" ]
+          # El proxy ve a la web y a Grafana...
           docker compose exec -T proxy getent hosts web
-          # ...pero no a la base de datos (no comparten red)
-          if docker compose exec -T proxy getent hosts db; then
-            echo "ERROR: el proxy puede resolver la base de datos"
-            exit 1
-          fi
+          docker compose exec -T proxy getent hosts grafana
+          # ...pero no a la base de datos ni a Prometheus (no comparten red)
+          for host in db prometheus; do
+            if docker compose exec -T proxy getent hosts "${host}"; then
+              echo "ERROR: el proxy puede resolver ${host}"
+              exit 1
+            fi
+          done
 
       - name: Comprobar que solo el proxy publica puertos
         run: |
-          for c in infra-lab-web infra-lab-db; do
-            bindings="$(docker inspect "$c" --format '{{json .HostConfig.PortBindings}}')"
+          for c in $(docker compose ps --format '{{.Name}}'); do
+            [ "${c}" = "infra-lab-proxy" ] && continue
+            bindings="$(docker inspect "${c}" --format '{{json .HostConfig.PortBindings}}')"
             echo "${c}: ${bindings}"
             [ "${bindings}" = "{}" ] || [ "${bindings}" = "null" ]
           done

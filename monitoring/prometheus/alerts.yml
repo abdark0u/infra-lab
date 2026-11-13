@@ -1,0 +1,42 @@
+groups:
+  - name: infra-lab
+    rules:
+      - alert: TargetDown
+        expr: up == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.job }} no responde"
+          description: "Prometheus no puede leer las metricas de {{ $labels.instance }} desde hace 1 minuto."
+
+      - alert: PostgresDown
+        expr: pg_up == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "PostgreSQL caido"
+          description: "postgres-exporter no puede conectar con la base de datos."
+
+      - alert: AppHighErrorRate
+        expr: |
+          sum(rate(infralab_http_requests_total{status=~"5.."}[5m]))
+            / sum(rate(infralab_http_requests_total[5m])) > 0.05
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Mas del 5% de errores 5xx en la app"
+          description: "Tasa de errores actual: {{ $value | humanizePercentage }}."
+
+      - alert: AppHighLatency
+        expr: |
+          histogram_quantile(0.95,
+            sum by (le) (rate(infralab_http_request_duration_seconds_bucket[5m]))) > 0.5
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Latencia p95 de la app por encima de 500 ms"
+          description: "p95 actual: {{ $value | humanizeDuration }}."

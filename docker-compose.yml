@@ -12,6 +12,8 @@ services:
     depends_on:
       web:
         condition: service_healthy
+      grafana:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1/healthz"]
       interval: 10s
@@ -21,7 +23,8 @@ services:
       - frontend
     restart: unless-stopped
 
-  # App web (Python + Flask): la ve el proxy por "frontend" y habla con la db por "backend"
+  # App web (Python + Flask): la ve el proxy por "frontend", habla con la db por "backend"
+  # y expone /metrics a Prometheus por "monitoring"
   web:
     build: ./web
     image: infra-lab-web:local
@@ -43,6 +46,7 @@ services:
     networks:
       - frontend
       - backend
+      - monitoring
     restart: unless-stopped
 
   # Base de datos: solo en la red interna, sin puertos publicados
@@ -65,6 +69,90 @@ services:
       - backend
     restart: unless-stopped
 
+  # ---------- Monitorizacion ----------
+
+  prometheus:
+    image: prom/prometheus:v3.5.0
+    container_name: infra-lab-prometheus
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=7d
+    volumes:
+      - ./monitoring/prometheus:/etc/prometheus:ro
+      - prometheus-data:/prometheus
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:9090/-/ready"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    networks:
+      - monitoring
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:12.1.1
+    container_name: infra-lab-grafana
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?Define GRAFANA_ADMIN_PASSWORD en .env}
+      # Servida por el proxy en /grafana/
+      GF_SERVER_ROOT_URL: http://localhost:${PROXY_HTTP_PORT:-8080}/grafana/
+      GF_SERVER_SERVE_FROM_SUB_PATH: "true"
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+      GF_ANALYTICS_CHECK_FOR_PLUGIN_UPDATES: "false"
+      GF_NEWS_NEWS_FEED_ENABLED: "false"
+      GF_PLUGINS_PREINSTALL_DISABLED: "true"
+    volumes:
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/dashboards:/etc/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    depends_on:
+      prometheus:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:3000/api/health || wget -q -O /dev/null http://127.0.0.1:3000/grafana/api/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
+    networks:
+      - frontend
+      - monitoring
+    restart: unless-stopped
+
+  # Traduce /stub_status de Nginx a metricas de Prometheus
+  nginx-exporter:
+    image: nginx/nginx-prometheus-exporter:1.4.2
+    container_name: infra-lab-nginx-exporter
+    command:
+      - --nginx.scrape-uri=http://proxy:8081/stub_status
+    depends_on:
+      proxy:
+        condition: service_healthy
+    networks:
+      - frontend
+      - monitoring
+    restart: unless-stopped
+
+  # Lee estadisticas de PostgreSQL por la red interna
+  postgres-exporter:
+    image: prometheuscommunity/postgres-exporter:v0.17.1
+    container_name: infra-lab-postgres-exporter
+    environment:
+      DATA_SOURCE_URI: db:5432/${POSTGRES_DB:-infralab}?sslmode=disable
+      DATA_SOURCE_USER: ${POSTGRES_USER:-infralab}
+      DATA_SOURCE_PASS: ${POSTGRES_PASSWORD:?Define POSTGRES_PASSWORD en .env}
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - backend
+      - monitoring
+    restart: unless-stopped
+
 networks:
   frontend:
     name: infra-lab-frontend
@@ -72,7 +160,14 @@ networks:
   backend:
     name: infra-lab-backend
     internal: true
+  monitoring:
+    name: infra-lab-monitoring
+    internal: true
 
 volumes:
   db-data:
     name: infra-lab-db-data
+  prometheus-data:
+    name: infra-lab-prometheus-data
+  grafana-data:
+    name: infra-lab-grafana-data
