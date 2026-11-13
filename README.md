@@ -67,13 +67,13 @@ Líneas continuas: tráfico de la aplicación. Líneas discontinuas: recogida de
 
 | Servicio | Imagen | Redes | Puerto publicado |
 |----------|--------|-------|------------------|
-| `proxy` | `nginx:1.27-alpine` | frontend | `8080` → 80 |
+| `proxy` | `nginx:1.30.6-alpine` | frontend | `8080` → 80 |
 | `web` | propia (`python:3.13-slim`) | frontend, backend, monitoring | ninguno |
 | `db` | `postgres:17-alpine` | backend | ninguno |
-| `prometheus` | `prom/prometheus:v3.5.0` | monitoring | ninguno |
-| `grafana` | `grafana/grafana:12.1.1` | frontend, monitoring | ninguno (vía proxy en `/grafana/`) |
-| `nginx-exporter` | `nginx/nginx-prometheus-exporter:1.4.2` | frontend, monitoring | ninguno |
-| `postgres-exporter` | `prometheuscommunity/postgres-exporter:v0.17.1` | backend, monitoring | ninguno |
+| `prometheus` | `prom/prometheus:v3.15.1` | monitoring | ninguno |
+| `grafana` | `grafana/grafana:13.3.0` | frontend, monitoring | ninguno (vía proxy en `/grafana/`) |
+| `nginx-exporter` | `nginx/nginx-prometheus-exporter:1.5.3` | frontend, monitoring | ninguno |
+| `postgres-exporter` | `prometheuscommunity/postgres-exporter:v0.20.1` | backend, monitoring | ninguno |
 
 | Red | Tipo | Quién está |
 |-----|------|------------|
