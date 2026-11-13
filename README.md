@@ -2,237 +2,293 @@
 
 [![CI](https://github.com/abdark0u/infra-lab/actions/workflows/ci.yml/badge.svg)](https://github.com/abdark0u/infra-lab/actions/workflows/ci.yml)
 
-Laboratorio de infraestructura con **Docker Compose**: un proxy inverso Nginx delante de una web,
-una base de datos aislada en red interna, monitorizacion con Prometheus + Grafana y un script de
-backup con rotacion.
+Laboratorio de infraestructura con **Docker Compose**: un proxy inverso Nginx delante de una app
+web, una base de datos PostgreSQL aislada en una red interna, monitorización con Prometheus y
+Grafana, y scripts de backup con rotación y restauración. Se levanta con un solo comando y GitHub
+Actions lo prueba entero en cada push.
 
-Proyecto de portfolio construido paso a paso; cada fase queda reflejada en el historial de commits.
+![Dashboard de Grafana con métricas reales del stack](docs/img/grafana-dashboard.png)
+
+<sub>Captura real generada por el workflow [Screenshots](.github/workflows/screenshots.yml) con el
+stack en marcha y tráfico simulado.</sub>
+
+## Qué demuestra este proyecto
+
+| Área | En este repo |
+|------|--------------|
+| Contenedores | 7 servicios con Docker Compose, imagen propia que no se ejecuta como root, healthchecks y arranque ordenado |
+| Redes y seguridad | 3 redes segmentadas (2 internas), un único puerto publicado, secretos fuera del repo, `/metrics` no expuesto |
+| Proxy inverso | Nginx enruta a la app y a Grafana (con websockets) y tiene su propio endpoint de salud |
+| Observabilidad | Prometheus con 4 fuentes de métricas, dashboard de Grafana y reglas de alerta, todo como código |
+| Backups | Volcados verificados con checksum, rotación, bloqueo contra ejecuciones simultáneas y restauración transaccional |
+| CI/CD | GitHub Actions levanta el stack completo y ejecuta 20 bloques de comprobaciones en cada push |
+| Automatización | Makefile para el día a día y generación de contraseñas aleatorias |
 
 ## Arquitectura
 
-```
-                       Internet / localhost:8080
-                                  |
-                           +-------------+
-                           |    proxy    |   Nginx: unico puerto publicado
-                           +-------------+
-                       /            |            \
-                  "/"          "/grafana/"     :8081/stub_status
-                     |              |              |
-                +---------+   +-----------+   +----------------+
-                |   web   |   |  grafana  |   | nginx-exporter |
-                +---------+   +-----------+   +----------------+
-                  |     |           |                  |
-                  |     |      consultas               |
-                  |     |           v                  |
-                  |     +----> +------------+ <--------+
-                  |  /metrics  | prometheus |
-                  |            +------------+ <--------+
-                  v                                    |
-                +---------+   +-------------------+    |
-                |   db    | <-| postgres-exporter |----+
-                +---------+   +-------------------+
+```mermaid
+flowchart TB
+    user(["Navegador"]) -->|"localhost:8080"| proxy
 
-  Redes:  frontend   -> proxy, web, grafana, nginx-exporter
-          backend    -> web, db, postgres-exporter                 (internal)
-          monitoring -> prometheus, grafana, web, ambos exporters  (internal)
+    subgraph entrada["Entrada"]
+        proxy["proxy<br/>Nginx"]
+    end
 
-  scripts/backup.sh   ->  pg_dump de db + checksum + rotacion
-  scripts/restore.sh  ->  restauracion verificada en una sola transaccion
+    subgraph aplicacion["Aplicación"]
+        web["web<br/>Flask + Gunicorn"]
+    end
+
+    subgraph datos["Datos"]
+        db[("db<br/>PostgreSQL 17")]
+    end
+
+    subgraph monitorizacion["Monitorización"]
+        grafana["grafana"]
+        prometheus["prometheus"]
+        nginxexp["nginx-exporter"]
+        pgexp["postgres-exporter"]
+    end
+
+    proxy -->|"/"| web
+    proxy -->|"/grafana/"| grafana
+    web -->|"SQL"| db
+    grafana -->|"PromQL"| prometheus
+    prometheus -.->|"/metrics"| web
+    prometheus -.-> nginxexp
+    prometheus -.-> pgexp
+    nginxexp -.->|"stub_status"| proxy
+    pgexp -.-> db
+    backup["scripts/backup.sh"] -->|"pg_dump"| db
 ```
+
+Líneas continuas: tráfico de la aplicación. Líneas discontinuas: recogida de métricas.
 
 | Servicio | Imagen | Redes | Puerto publicado |
 |----------|--------|-------|------------------|
-| `proxy` | `nginx:1.27-alpine` | frontend | `8080` -> 80 |
-| `web` | build propio (`python:3.13-slim`) | frontend, backend, monitoring | ninguno |
+| `proxy` | `nginx:1.27-alpine` | frontend | `8080` → 80 |
+| `web` | propia (`python:3.13-slim`) | frontend, backend, monitoring | ninguno |
 | `db` | `postgres:17-alpine` | backend | ninguno |
 | `prometheus` | `prom/prometheus:v3.5.0` | monitoring | ninguno |
-| `grafana` | `grafana/grafana:12.1.1` | frontend, monitoring | ninguno (via proxy en `/grafana/`) |
+| `grafana` | `grafana/grafana:12.1.1` | frontend, monitoring | ninguno (vía proxy en `/grafana/`) |
 | `nginx-exporter` | `nginx/nginx-prometheus-exporter:1.4.2` | frontend, monitoring | ninguno |
 | `postgres-exporter` | `prometheuscommunity/postgres-exporter:v0.17.1` | backend, monitoring | ninguno |
 
-### Decisiones de diseno
+| Red | Tipo | Quién está |
+|-----|------|------------|
+| `frontend` | normal | proxy, web, grafana, nginx-exporter |
+| `backend` | `internal` (sin salida a Internet) | web, db, postgres-exporter |
+| `monitoring` | `internal` (sin salida a Internet) | prometheus, grafana, web, nginx-exporter, postgres-exporter |
 
-- **Una sola puerta de entrada**: solo el proxy publica un puerto; `web` y `db` no son accesibles
-  desde el host.
-- **Red `backend` con `internal: true`**: la base de datos no tiene salida a Internet y el proxy no
-  puede verla, porque no comparten red. Solo `web` esta en las dos redes.
-- **Arranque ordenado con healthchecks**: `db` (`pg_isready`) -> `web` (`/health`, que consulta la
-  base de datos) -> `proxy`. Cada servicio espera a que el anterior este sano.
-- **Secretos fuera del repo**: las credenciales viven en `.env` (ignorado por git); `.env.example`
-  es solo la plantilla. Compose falla al arrancar si falta `POSTGRES_PASSWORD`.
-- **Contenedor de la app sin root**: la imagen de `web` ejecuta Gunicorn con un usuario sin
-  privilegios.
-- **Monitorizacion en su propia red interna**: Prometheus solo esta en `monitoring`, asi que ni se
-  publica ni lo alcanza el proxy. Grafana es lo unico de monitorizacion que se sirve hacia fuera, y
-  lo hace a traves del proxy en `/grafana/`.
-- **`/metrics` no se expone**: el proxy devuelve `404` en `/metrics`; Prometheus lee las metricas
+### Decisiones de diseño
+
+- **Una sola puerta de entrada**: solo el proxy publica un puerto. Ningún otro servicio es
+  accesible desde el host.
+- **Redes internas**: `backend` y `monitoring` usan `internal: true`, así que no tienen salida a
+  Internet. El proxy no puede ver ni la base de datos ni Prometheus porque no comparte red con
+  ellos; `web` es el único puente entre el proxy y la base de datos.
+- **Arranque ordenado con healthchecks**: `db` (`pg_isready`) → `web` (`/health`, que consulta la
+  base de datos) → `proxy`. Cada servicio espera a que el anterior esté sano.
+- **Secretos fuera del repo**: las credenciales viven en `.env`, que git ignora. `make env` lo crea
+  con contraseñas aleatorias y Compose se niega a arrancar si falta alguna.
+- **App sin privilegios**: la imagen de `web` ejecuta Gunicorn con un usuario sin root.
+- **`/metrics` no se expone**: el proxy devuelve `404` en `/metrics`; Prometheus lee las métricas
   de la app directamente por la red `monitoring`.
-- **Todo como codigo**: el datasource y el dashboard de Grafana se cargan por *provisioning* desde
-  el repo, y las alertas de Prometheus viven en
+- **Todo como código**: el datasource y el dashboard de Grafana se cargan por *provisioning* desde
+  el repo, y las alertas de Prometheus están en
   [`monitoring/prometheus/alerts.yml`](monitoring/prometheus/alerts.yml).
 
-## Monitorizacion
+## Puesta en marcha
 
-Prometheus recoge metricas cada 15 s de cuatro fuentes:
+Requisitos: Docker con Compose v2, `make` y `curl` (`make lint` usa además `python3`). Se prueba
+automáticamente en GitHub Actions (Ubuntu + Docker Engine).
 
-| Job | Origen | Ejemplos de metricas |
+```bash
+git clone https://github.com/abdark0u/infra-lab.git
+cd infra-lab
+make up
+```
+
+`make up` crea `.env` con contraseñas aleatorias si aún no existe, construye la imagen de la app y
+espera a que todos los servicios estén sanos.
+
+| URL | Qué es |
+|-----|--------|
+| <http://localhost:8080> | La app: cada visita se guarda en PostgreSQL |
+| <http://localhost:8080/grafana/> | Grafana (usuario `admin`; la contraseña es `GRAFANA_ADMIN_PASSWORD` en `.env`) |
+| <http://localhost:8080/health> | Salud de la app y de su conexión a la base de datos |
+| <http://localhost:8080/healthz> | Salud del propio proxy |
+
+<img src="docs/img/web.png" alt="Página de la app con el contador de visitas guardado en PostgreSQL" width="640">
+
+## Comandos (Makefile)
+
+| Comando | Qué hace |
+|---------|----------|
+| `make up` | Crea `.env` si falta, construye y levanta el stack esperando a los healthchecks |
+| `make down` | Para el stack (los datos se conservan en los volúmenes) |
+| `make restart` | `down` + `up` |
+| `make ps` | Estado de los servicios |
+| `make logs` | Logs en vivo (`S=web` para ver solo un servicio) |
+| `make health` | Comprueba proxy, app y Grafana a través del proxy |
+| `make lint` | Valida Compose, scripts (`shellcheck`), Prometheus (`promtool`) y el JSON del dashboard |
+| `make backup` | Backup de PostgreSQL con rotación (`KEEP=14` para conservar 14) |
+| `make restore` | Restaura un backup (`FILE=ruta` o `latest`; `YES=1` sin confirmación) |
+| `make clean` | Para el stack y **borra** todos los datos (pide confirmación) |
+| `make env` | Solo crea `.env` con contraseñas aleatorias (nunca sobrescribe uno existente) |
+
+## Monitorización
+
+Prometheus recoge métricas cada 15 s de cuatro fuentes:
+
+| Job | Origen | Ejemplos de métricas |
 |-----|--------|----------------------|
 | `web` | `/metrics` de la app (`prometheus_client`) | `infralab_http_requests_total`, `infralab_http_request_duration_seconds`, `infralab_visits_recorded_total` |
-| `nginx` | `stub_status` de Nginx via `nginx-exporter` | `nginx_http_requests_total`, `nginx_connections_active` |
-| `postgres` | PostgreSQL via `postgres-exporter` | `pg_up`, `pg_database_size_bytes` |
+| `nginx` | `stub_status` de Nginx vía `nginx-exporter` | `nginx_http_requests_total`, `nginx_connections_active` |
+| `postgres` | PostgreSQL vía `postgres-exporter` | `pg_up`, `pg_database_size_bytes` |
 | `prometheus` | el propio Prometheus | `up`, `prometheus_tsdb_*` |
 
 El dashboard **infra-lab - Overview** (carpeta `infra-lab` en Grafana) muestra el estado de cada
-servicio, peticiones por segundo y latencia p95 de la app, trafico de Nginx y tamano de la base
-de datos.
+servicio, las visitas, las peticiones por segundo y la latencia p95 de la app, el tráfico de Nginx
+y el tamaño de la base de datos.
 
-Reglas de alerta definidas (visibles en Prometheus, pestana *Alerts*):
+Reglas de alerta (visibles en la pestaña *Alerts* de Prometheus):
 
-| Alerta | Condicion |
-|--------|-----------|
-| `TargetDown` | algun servicio deja de responder a Prometheus durante 1 min |
+| Alerta | Se dispara cuando |
+|--------|-------------------|
+| `TargetDown` | un servicio deja de responder a Prometheus durante 1 min |
 | `PostgresDown` | `postgres-exporter` no puede conectar con la base de datos durante 1 min |
-| `AppHighErrorRate` | mas del 5 % de respuestas 5xx durante 5 min |
-| `AppHighLatency` | latencia p95 por encima de 500 ms durante 5 min |
+| `AppHighErrorRate` | más del 5 % de las respuestas son 5xx durante 5 min |
+| `AppHighLatency` | la latencia p95 supera 500 ms durante 5 min |
 
-Para abrir la interfaz de Prometheus (no esta publicada) se puede usar un tunel temporal:
+Prometheus no está publicado. Para abrir su interfaz se puede usar un túnel temporal:
 
 ```bash
 docker run --rm -it --network infra-lab-monitoring -p 9090:9090 alpine/socat TCP-LISTEN:9090,fork TCP:prometheus:9090
 ```
 
-## Hoja de ruta
+## Backups y restauración
 
-- [x] Fase 1: proxy inverso Nginx + web
-- [x] CI: smoke test automatico en GitHub Actions
-- [x] Fase 2: base de datos PostgreSQL en red interna + app con contador de visitas
-- [x] Fase 3: Prometheus + Grafana con dashboard y alertas como codigo
-- [x] Fase 4: scripts de backup con rotacion y de restauracion
-- [ ] Fase 5: Makefile y documentacion final
-
-## Requisitos
-
-- Docker y Docker Compose v2 (`docker compose version`)
-
-## Puesta en marcha
+[`scripts/backup.sh`](scripts/backup.sh) (o `make backup`) hace un volcado de PostgreSQL y conserva
+solo los más recientes:
 
 ```bash
-cp .env.example .env      # y cambia las contrasenas
-docker compose up -d --build --wait
-```
-
-| URL | Que es |
-|-----|--------|
-| <http://localhost:8080> | La web: cada visita se guarda en PostgreSQL |
-| <http://localhost:8080/grafana/> | Grafana (usuario y contrasena de `.env`) |
-| <http://localhost:8080/health> | Salud de la app y de su conexion a la base de datos |
-| <http://localhost:8080/healthz> | Salud del propio proxy |
-
-Parar todo (los datos se conservan en el volumen `infra-lab-db-data`):
-
-```bash
-docker compose down
-```
-
-Borrar tambien los datos:
-
-```bash
-docker compose down --volumes
-```
-
-## Backups
-
-[`scripts/backup.sh`](scripts/backup.sh) hace un volcado de PostgreSQL y conserva solo los N mas
-recientes:
-
-```bash
-./scripts/backup.sh            # conserva los 7 ultimos (por defecto)
-./scripts/backup.sh -k 14      # conserva los 14 ultimos
+./scripts/backup.sh            # conserva los 7 últimos (por defecto)
+./scripts/backup.sh -k 14      # conserva los 14 últimos
 ./scripts/backup.sh -d /ruta   # otra carpeta de destino
 ```
 
-Que hace, paso a paso:
+Paso a paso:
 
-1. Comprueba que `db` esta en marcha y toma un **lock** (`backups/.backup.lock`) para que no se
+1. Comprueba que `db` está en marcha y toma un **lock** (`backups/.backup.lock`) para que no se
    ejecuten dos backups a la vez.
 2. Ejecuta `pg_dump --format=custom` dentro del contenedor y lo escribe en un archivo `.partial`.
-3. **Verifica** que el volcado no esta vacio y que `pg_restore --list` puede leerlo.
-4. Solo entonces lo renombra a `infralab_<fecha UTC>.dump`: nunca queda un backup a medias con
-   nombre definitivo.
+3. **Verifica** que el volcado no está vacío y que `pg_restore --list` puede leerlo.
+4. Solo entonces lo renombra a `infralab_<fecha UTC>.dump`, así que nunca queda un backup a medias
+   con nombre definitivo.
 5. Guarda su checksum en `infralab_<fecha UTC>.dump.sha256`.
-6. **Rotacion**: borra los backups que sobran, empezando por los mas antiguos.
+6. **Rotación**: borra los backups que sobran, empezando por los más antiguos.
 
-Los backups se crean con permisos `600` (solo los lee su propietario) y la carpeta `backups/`
-esta en `.gitignore`.
+Los backups se crean con permisos `600` (solo los lee su propietario) y la carpeta `backups/` está
+en `.gitignore`.
 
-Programarlo con cron (todos los dias a las 03:00):
+Programarlo con cron (todos los días a las 03:00):
 
 ```cron
 0 3 * * * /ruta/a/infra-lab/scripts/backup.sh >> /ruta/a/infra-lab/backups/backup.log 2>&1
 ```
 
-### Restauracion
-
-[`scripts/restore.sh`](scripts/restore.sh) comprueba el checksum, pide confirmacion y restaura con
-`pg_restore --single-transaction`: si algo falla a mitad, la base de datos queda como estaba.
+[`scripts/restore.sh`](scripts/restore.sh) (o `make restore`) comprueba el checksum, pide
+confirmación y restaura con `pg_restore --single-transaction`: si algo falla a mitad, la base de
+datos queda como estaba.
 
 ```bash
-./scripts/restore.sh latest                                  # el backup mas reciente
+./scripts/restore.sh latest                                  # el backup más reciente
 ./scripts/restore.sh backups/infralab_20261113T030000Z.dump  # uno concreto
-./scripts/restore.sh -y latest                               # sin confirmacion (scripts/CI)
+./scripts/restore.sh -y latest                               # sin confirmación (scripts/CI)
 ```
 
-## Integracion continua
+## Integración continua
 
-Cada push a `main` ejecuta [`.github/workflows/ci.yml`](.github/workflows/ci.yml) en GitHub Actions,
-que construye y levanta el stack en un runner limpio y comprueba que:
+| Workflow | Cuándo | Qué hace |
+|----------|--------|----------|
+| [CI](.github/workflows/ci.yml) | Cada push a `main` y cada pull request | Levanta el stack en un runner limpio y lo prueba entero |
+| [Screenshots](.github/workflows/screenshots.yml) | A mano | Genera tráfico, abre la app y Grafana en Chromium y guarda las capturas de este README |
 
-- `docker-compose.yml` es valido, Nginx pasa `nginx -t` y Prometheus pasa `promtool check config`
-  (incluidas las reglas de alerta)
-- todos los servicios llegan a estado `healthy`
-- el proxy responde en `/healthz` y la app en `/health` con la base de datos accesible
-- cada visita a la web se guarda en PostgreSQL
-- los datos sobreviven a un `docker compose down` + `up` (volumen persistente)
+La CI usa los mismos comandos `make` que se usan en local y comprueba que:
+
+- `make env` no deja contraseñas por defecto, crea `.env` con permisos `600` y no lo sobrescribe
+- Compose, los scripts (`shellcheck`), Prometheus y sus alertas (`promtool`) y el dashboard son
+  válidos, y Nginx pasa `nginx -t`
+- todos los servicios llegan a `healthy` y responden los endpoints de salud
+- cada visita se guarda en PostgreSQL y los datos sobreviven a un reinicio
+- los backups se crean con checksum, la rotación conserva exactamente los indicados, el lock impide
+  dos backups a la vez, una restauración devuelve los datos exactos del backup y un backup dañado
+  se rechaza
 - `/metrics` devuelve `404` desde fuera
-- Prometheus tiene sus 4 targets en `up` y recibe metricas de la app, Nginx y PostgreSQL
-- Grafana responde a traves del proxy, su datasource conecta con Prometheus y el dashboard esta
-  cargado
-- las redes `backend` y `monitoring` son internas y el proxy **no** puede resolver ni la base de
-  datos ni Prometheus
-- ningun servicio salvo el proxy publica puertos
-- los scripts pasan `shellcheck`
-- `backup.sh` crea backups validos con checksum, rota correctamente (5 ejecuciones con `-k 3`
-  dejan 3) y se niega a ejecutarse si otro backup tiene el lock
-- `restore.sh` devuelve la base de datos exactamente al estado del backup y rechaza un backup
-  danado
+- Prometheus tiene sus 4 targets en `up` y recibe métricas de la app, Nginx y PostgreSQL
+- Grafana responde a través del proxy, su datasource conecta con Prometheus, el dashboard está
+  cargado y todos los ficheros de su interfaz se sirven correctamente
+- las redes internas lo son de verdad: el proxy no puede resolver ni la base de datos ni
+  Prometheus, y ningún servicio salvo el proxy publica puertos
 
-## Estructura
+## Estructura del repositorio
 
 ```
 .
-├── .github/workflows/
-│   └── ci.yml              # smoke test en GitHub Actions
+├── Makefile                # comandos del día a día (make help)
 ├── docker-compose.yml
 ├── .env.example            # plantilla de variables (el .env real no se sube)
+├── .github/
+│   ├── workflows/
+│   │   ├── ci.yml          # prueba completa del stack en cada push
+│   │   └── screenshots.yml # capturas para el README (manual)
+│   └── scripts/
+│       └── capture-screenshots.mjs
 ├── proxy/
-│   └── default.conf        # configuracion del proxy inverso
+│   └── default.conf        # proxy inverso, /grafana/, stub_status
 ├── web/
 │   ├── Dockerfile          # imagen de la app (usuario sin root)
 │   ├── app.py              # Flask: contador de visitas + /health + /metrics
 │   └── requirements.txt
 ├── db/
 │   └── init/
-│       └── 01-schema.sql   # esquema inicial (se ejecuta solo con el volumen vacio)
+│       └── 01-schema.sql   # esquema inicial (solo con el volumen vacío)
+├── monitoring/
+│   ├── prometheus/
+│   │   ├── prometheus.yml  # targets a monitorizar
+│   │   └── alerts.yml      # reglas de alerta
+│   └── grafana/
+│       ├── provisioning/   # datasource y proveedor de dashboards
+│       └── dashboards/
+│           └── infra-lab-overview.json
 ├── scripts/
-│   ├── backup.sh           # pg_dump + verificacion + checksum + rotacion
-│   └── restore.sh          # restauracion verificada y transaccional
-└── monitoring/
-    ├── prometheus/
-    │   ├── prometheus.yml  # targets a monitorizar
-    │   └── alerts.yml      # reglas de alerta
-    └── grafana/
-        ├── provisioning/   # datasource y proveedor de dashboards
-        └── dashboards/
-            └── infra-lab-overview.json
+│   ├── init-env.sh         # crea .env con contraseñas aleatorias
+│   ├── backup.sh           # pg_dump + verificación + checksum + rotación
+│   └── restore.sh          # restauración verificada y transaccional
+└── docs/img/               # capturas del README
 ```
+
+## Cómo se construyó
+
+El proyecto se hizo por fases, cada una con su commit y validada por la CI antes de pasar a la
+siguiente:
+
+1. Proxy inverso Nginx + web, y la CI en GitHub Actions
+2. PostgreSQL en red interna + app con contador de visitas
+3. Prometheus + Grafana con dashboard y alertas como código
+4. Scripts de backup con rotación y de restauración
+5. Makefile, contraseñas aleatorias, capturas y documentación
+
+## Limitaciones y próximos pasos
+
+- **HTTPS**: el proxy solo sirve HTTP. En un servidor real añadiría TLS con Let's Encrypt.
+- **Avisos de alertas**: las reglas se evalúan en Prometheus, pero falta Alertmanager para avisar
+  por correo o chat.
+- **Backups fuera de la máquina**: ahora se guardan en el mismo host. El siguiente paso sería
+  cifrarlos y copiarlos a un almacenamiento externo (por ejemplo, con restic a S3).
+- **Secretos**: se pasan como variables de entorno; Docker secrets o un gestor como Vault serían más
+  robustos.
+- **Escalado de la app**: Gunicorn usa un solo proceso (con 4 hilos) para que las métricas en
+  memoria sean completas; con varios procesos haría falta el modo multiproceso de
+  `prometheus_client`.
+- **Seguridad de las imágenes**: añadir un escáner de vulnerabilidades como Trivy a la CI.
