@@ -14,7 +14,7 @@ jobs:
   smoke-test:
     name: Smoke test (docker compose)
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
 
     steps:
       - name: Checkout
@@ -26,8 +26,8 @@ jobs:
       - name: Validar docker-compose.yml
         run: docker compose config --quiet
 
-      - name: Levantar el stack
-        run: docker compose up -d --wait --wait-timeout 60
+      - name: Construir y levantar el stack (espera a healthchecks)
+        run: docker compose up -d --build --wait --wait-timeout 120
 
       - name: Validar configuracion de Nginx
         run: docker compose exec -T proxy nginx -t
@@ -37,16 +37,52 @@ jobs:
           curl --fail --silent --show-error --retry 10 --retry-delay 2 --retry-all-errors \
             http://localhost:8080/healthz | grep -qx "ok"
 
-      - name: Comprobar que la web llega a traves del proxy
+      - name: Comprobar /health de la app (incluye la base de datos)
         run: |
-          curl --fail --silent --show-error --retry 10 --retry-delay 2 --retry-all-errors \
-            http://localhost:8080/ | grep -q "infra-lab funciona"
+          curl --fail --silent --show-error http://localhost:8080/health | tee /dev/stderr \
+            | grep -q '"database":"ok"'
 
-      - name: Comprobar que la web no esta expuesta directamente
+      - name: Comprobar que las visitas se guardan en PostgreSQL
         run: |
-          bindings="$(docker inspect infra-lab-web --format '{{json .HostConfig.PortBindings}}')"
-          echo "PortBindings de web: ${bindings}"
-          [ "${bindings}" = "{}" ] || [ "${bindings}" = "null" ]
+          count() {
+            docker compose exec -T db sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -tAc "SELECT count(*) FROM visits"'
+          }
+          before="$(count)"
+          curl --fail --silent --show-error http://localhost:8080/ | grep -q "infra-lab funciona"
+          curl --fail --silent --show-error http://localhost:8080/ > /dev/null
+          after="$(count)"
+          echo "visitas: ${before} -> ${after}"
+          [ "${after}" -eq "$((before + 2))" ]
+          echo "${after}" > /tmp/visits_before_restart
+
+      - name: Comprobar que los datos sobreviven a un reinicio (volumen)
+        run: |
+          docker compose down
+          docker compose up -d --wait --wait-timeout 120
+          after="$(docker compose exec -T db sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -tAc "SELECT count(*) FROM visits"')"
+          echo "visitas tras reinicio: ${after}"
+          [ "${after}" -eq "$(cat /tmp/visits_before_restart)" ]
+
+      - name: Comprobar aislamiento de red
+        run: |
+          set -x
+          # La red backend es interna (sin salida a Internet)
+          [ "$(docker network inspect infra-lab-backend --format '{{.Internal}}')" = "true" ]
+          # El proxy ve a la web...
+          docker compose exec -T proxy getent hosts web
+          # ...pero no a la base de datos (no comparten red)
+          if docker compose exec -T proxy getent hosts db; then
+            echo "ERROR: el proxy puede resolver la base de datos"
+            exit 1
+          fi
+
+      - name: Comprobar que solo el proxy publica puertos
+        run: |
+          for c in infra-lab-web infra-lab-db; do
+            bindings="$(docker inspect "$c" --format '{{json .HostConfig.PortBindings}}')"
+            echo "${c}: ${bindings}"
+            [ "${bindings}" = "{}" ] || [ "${bindings}" = "null" ]
+          done
 
       - name: Logs de los contenedores (si algo falla)
         if: failure()
