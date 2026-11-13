@@ -15,7 +15,8 @@ env:
 jobs:
   screenshots:
     name: Capturas de la web y de Grafana
-    runs-on: ubuntu-latest
+    # Fijado a 24.04: Playwright 1.54 no soporta el ubuntu-latest actual (26.04)
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
 
     steps:
