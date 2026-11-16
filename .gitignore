@@ -1,18 +1,15 @@
-# Secretos y configuración local: esto no se sube nunca
 .env
 *.env.local
 
-# Datos de los contenedores y backups (con información de la base de datos)
+# Los backups llevan datos de la base de datos
 data/
 backups/
 *.sql.gz
 *.dump
 
-# Cosas del sistema y de los editores
 .DS_Store
 .idea/
 .vscode/
 *.swp
 
-# Mis notas privadas
 docs/notes/

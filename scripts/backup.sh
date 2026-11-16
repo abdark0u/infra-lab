@@ -1,15 +1,6 @@
 #!/usr/bin/env bash
-# Backup de la base de datos PostgreSQL de infra-lab, con rotación.
-#
-# Hace un volcado con pg_dump (formato custom), comprueba que se puede leer,
-# guarda su checksum SHA-256 y borra los backups más antiguos que sobren.
-# Un backup que no has comprobado no es un backup, por eso lo verifico antes de
-# darlo por bueno.
-#
-# Uso: scripts/backup.sh [-d DIR] [-k N] [-h]
-#
-# Ejemplo en cron (todos los días a las 03:00):
-#   0 3 * * * /ruta/a/infra-lab/scripts/backup.sh >> /ruta/a/infra-lab/backups/backup.log 2>&1
+# Backup de PostgreSQL con checksum y rotación. Un backup sin comprobar no es un backup,
+# así que verifico que pg_restore lo puede leer antes de darlo por bueno.
 set -Eeuo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -68,7 +59,7 @@ require_running_db() {
 }
 
 acquire_lock() {
-    # mkdir es atómico: si la carpeta ya existe es que hay otro backup en marcha
+    # mkdir es atómico: si ya existe, hay otro backup en marcha
     if ! mkdir -- "$backup_dir/.backup.lock" 2>/dev/null; then
         die "Ya hay un backup en curso (existe $backup_dir/.backup.lock)"
     fi
@@ -77,7 +68,7 @@ acquire_lock() {
 
 dump_database() {
     local target=$1
-    # Comillas simples a propósito: las variables se expanden dentro del contenedor, no en el host
+    # Comillas simples: las variables se expanden dentro del contenedor
     # shellcheck disable=SC2016
     docker compose exec -T db sh -c \
         'pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" --format=custom --no-owner' > "$target"
@@ -92,7 +83,7 @@ verify_dump() {
 
 rotate_backups() {
     local old
-    # El nombre lleva la fecha en un formato ordenable: orden alfabético = orden cronológico
+    # La fecha del nombre es ordenable: orden alfabético = cronológico
     find "$backup_dir" -maxdepth 1 -type f -name "${BACKUP_PREFIX}_*.dump" \
         | sort -r \
         | tail -n "+$((keep + 1))" \
@@ -120,7 +111,7 @@ main() {
     cd "$PROJECT_DIR"
     require_running_db
 
-    # Los backups llevan datos de la base de datos: permisos 600, que solo los lea quien los crea
+    # Llevan datos de la db: permisos 600
     umask 077
     mkdir -p -- "$backup_dir"
     trap cleanup EXIT

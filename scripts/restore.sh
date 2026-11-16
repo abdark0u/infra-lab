@@ -1,12 +1,6 @@
 #!/usr/bin/env bash
-# Restaura la base de datos PostgreSQL de infra-lab desde un backup hecho con backup.sh.
-#
-# Primero comprueba el checksum SHA-256 para no restaurar un archivo dañado (ojo: detecta
-# corrupción, no a alguien que cambie también el .sha256). Luego pide confirmación y
-# restaura en una sola transacción: si algo falla a mitad, la base de datos se queda
-# como estaba.
-#
-# Uso: scripts/restore.sh [-y] [-d DIR] <archivo.dump | latest>
+# Restaura un backup de backup.sh en una sola transacción: si falla, la db queda como estaba.
+# Ojo: el checksum detecta corrupción, no a alguien que cambie también el .sha256.
 set -Eeuo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -83,7 +77,7 @@ confirm() {
 
 restore_database() {
     local file=$1
-    # Comillas simples a propósito: las variables se expanden dentro del contenedor, no en el host
+    # Comillas simples: las variables se expanden dentro del contenedor
     # shellcheck disable=SC2016
     docker compose exec -T db sh -c \
         'pg_restore -U "$POSTGRES_USER" -d "$POSTGRES_DB" --clean --if-exists --no-owner --single-transaction' \

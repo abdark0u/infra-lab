@@ -1,9 +1,6 @@
 #!/usr/bin/env bash
-# Crea el .env a partir de .env.example y cambia cada "change-me-please" por una
-# contraseña aleatoria, para que nadie arranque el stack con contraseñas por defecto.
+# Crea .env con contraseñas aleatorias para que nadie arranque con las de por defecto.
 # Nunca machaca un .env que ya exista.
-#
-# Uso: scripts/init-env.sh   (o: make env)
 set -Eeuo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -31,7 +28,6 @@ cleanup() {
 }
 
 generate_secret() {
-    # 24 bytes de /dev/urandom en hexadecimal (48 caracteres), así no dependo de openssl
     od -An -vtx1 -N24 /dev/urandom | tr -d ' \n'
 }
 

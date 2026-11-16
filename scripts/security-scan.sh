@@ -1,16 +1,7 @@
 #!/usr/bin/env bash
-# Escaneo de seguridad de infra-lab con Trivy. Trivy corre en un contenedor, así que
-# no hay que instalar nada.
-#
-# Falla (sale con error) si encuentra:
-#   1. Vulnerabilidades HIGH o CRITICAL con parche en mi imagen (web).
-#   2. Errores de configuración HIGH o CRITICAL en el Dockerfile de la app.
-#   3. Secretos (claves privadas, tokens...) en los archivos del repo.
-# Solo avisa de:
-#   4. Vulnerabilidades de las imágenes de terceros (nginx, postgres, grafana...). Lo que
-#      llevan dentro no depende de mí: se arreglan subiendo de versión en docker-compose.yml.
-#
-# Uso: scripts/security-scan.sh   (o: make scan)
+# Escaneo con Trivy (en Docker). Falla con vulnerabilidades de mi imagen, fallos del
+# Dockerfile o secretos en el repo. Las imágenes de terceros solo avisan: no dependen
+# de mí, se arreglan subiendo de versión.
 set -Eeuo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -31,7 +22,6 @@ die() {
     exit 1
 }
 
-# Escribe en el resumen del job de GitHub Actions (en local no hace nada)
 summary() {
     if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; then
         printf '%s\n' "$@" >> "$GITHUB_STEP_SUMMARY"
@@ -46,7 +36,6 @@ run_trivy() {
         "$TRIVY_IMAGE" --quiet "$@"
 }
 
-# Lanza una comprobación de las que bloquean y apunta el resultado en el resumen
 gate() {
     local description=$1
     shift
@@ -63,7 +52,7 @@ third_party_images() {
     docker compose --env-file .env.example config --images | grep -vxF "$OWN_IMAGE" | sort -u
 }
 
-# Devuelve "<critical> <high>": cuántas vulnerabilidades con parche tiene una imagen
+# Devuelve "<critical> <high>"
 count_by_severity() {
     run_trivy image --severity "$SEVERITIES" --ignore-unfixed --format json "$1" \
         | jq -r '[.Results[]?.Vulnerabilities[]?.Severity] as $s
@@ -112,7 +101,7 @@ main() {
     gate "2/4 Dockerfile de la app: configuracion $SEVERITIES" \
         run_trivy config --severity "$SEVERITIES" --exit-code 1 /src/web \
         || failed=1
-    # .env y backups/ no se suben a git: los excluyo por si existen en local
+    # .env y backups/ no están en git, pero pueden existir en local
     gate "3/4 Secretos en los archivos del repositorio" \
         run_trivy fs --scanners secret --skip-files '**/.env' --skip-dirs '**/backups' \
         --exit-code 1 /src \

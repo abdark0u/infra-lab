@@ -1,8 +1,6 @@
 name: Screenshots
 
-# Saca capturas reales del stack funcionando para el README (nada de imágenes de
-# relleno). Se lanza a mano desde la pestaña Actions (o con: gh workflow run
-# screenshots.yml) y deja las imágenes como artefacto para descargarlas.
+# A mano (gh workflow run screenshots.yml): capturas reales para el README
 on:
   workflow_dispatch:
 
@@ -15,7 +13,7 @@ env:
 jobs:
   screenshots:
     name: Capturas de la web y de Grafana
-    # Lo fijo en 24.04: Playwright 1.54 no es compatible con el ubuntu-latest actual (26.04)
+    # Playwright 1.54 no funciona en ubuntu-latest (26.04)
     runs-on: ubuntu-24.04
     timeout-minutes: 20
 
@@ -52,7 +50,7 @@ jobs:
             fi
             sleep "0.$((RANDOM % 8 + 2))"
           done
-          # Espero a que Prometheus haga un último scrape para que salga todo en las gráficas
+          # Último scrape de Prometheus
           sleep 20
 
       - name: Instalar Playwright y Chromium

@@ -1,8 +1,6 @@
 name: Security
 
-# Escaneo de seguridad con Trivy (scripts/security-scan.sh).
-# Se lanza en cada push y además todos los lunes, porque salen CVE nuevas cada
-# semana aunque yo no toque el código.
+# Los lunes también: salen CVE nuevas aunque no toque el código
 on:
   push:
     branches: [main]

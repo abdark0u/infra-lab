@@ -1,7 +1,4 @@
-// Saca las capturas del README (la web y el dashboard de Grafana) con Playwright.
-// Espera a que todo esté dibujado de verdad y, si algo no carga, falla: prefiero
-// ver el workflow en rojo a subir una captura rota. Además enseña los errores del
-// navegador para poder depurar.
+// Capturas del README. Si algo no carga, falla: mejor en rojo que una captura rota.
 import { mkdir } from "node:fs/promises";
 import { chromium } from "playwright";
 
@@ -19,15 +16,14 @@ const TARGETS = [
     name: "grafana-dashboard",
     url: `${BASE_URL}/grafana/d/infra-lab-overview/infra-lab-overview?orgId=1&from=now-3m&to=now&kiosk`,
     viewport: { width: 1600, height: 960 },
-    // Grafana pinta las gráficas en <canvas>, así que espero a que haya uno
+    // Grafana pinta las gráficas en <canvas>
     readySelector: "canvas",
     settleMs: 5000,
   },
 ];
 
 async function capture(browser, target) {
-  // Ojo: sin locale, Chromium coge el del runner ("en-US@posix"), que
-  // Intl.NumberFormat no acepta, y Grafana ni llega a arrancar. Por eso lo fijo.
+  // Sin locale coge "en-US@posix" del runner y Grafana no arranca
   const page = await browser.newPage({
     viewport: target.viewport,
     locale: "es-ES",

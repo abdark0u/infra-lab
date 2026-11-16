@@ -1,8 +1,4 @@
-"""App web de infra-lab: guarda cada visita en PostgreSQL y enseña el total.
-
-Es sencilla a propósito: lo interesante del proyecto es la infraestructura de
-alrededor (proxy, redes internas, monitorización y backups).
-"""
+"""App de infra-lab: guarda cada visita en PostgreSQL y enseña el total."""
 
 import logging
 import os
